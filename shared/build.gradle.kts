@@ -22,7 +22,7 @@ kotlin {
     }
     
     android {
-       namespace = "io.gothub.hosseinkarami_dev.penny.shared"
+       namespace = "io.github.hosseinkarami_dev.penny.shared"
        compileSdk = libs.versions.android.compileSdk.get().toInt()
        minSdk = libs.versions.android.minSdk.get().toInt()
     
@@ -47,6 +47,12 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.compose.uiTooling)
+            implementation(libs.cryptography.provider.jdk)
+            implementation(libs.androidx.work.runtime)
+            implementation(libs.androidx.core.ktx)
+        }
+        iosMain.dependencies {
+            implementation(libs.cryptography.provider.cryptokit)
         }
         commonMain.dependencies {
             implementation(libs.compose.runtime)
@@ -63,6 +69,10 @@ kotlin {
             implementation(libs.koin.compose)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.kotlinx.serialization.json)
+            implementation(libs.kotlinx.datetime)
+            implementation(libs.mdi.icons)
+            implementation(libs.cryptography.core)
+            implementation(libs.cryptography.random)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)

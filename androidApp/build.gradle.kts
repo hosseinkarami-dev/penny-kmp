@@ -20,11 +20,11 @@ dependencies {
 }
 
 android {
-    namespace = "io.gothub.hosseinkarami_dev.penny"
+    namespace = "io.github.hosseinkarami_dev.penny"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
 
     defaultConfig {
-        applicationId = "io.gothub.hosseinkarami_dev.penny"
+        applicationId = "io.github.hosseinkarami_dev.penny"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = 1

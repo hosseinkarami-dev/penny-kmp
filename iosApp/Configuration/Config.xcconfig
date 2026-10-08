@@ -1,7 +1,7 @@
 TEAM_ID=
 
 PRODUCT_NAME=Penny
-PRODUCT_BUNDLE_IDENTIFIER=io.gothub.hosseinkarami_dev.penny.Penny$(TEAM_ID)
+PRODUCT_BUNDLE_IDENTIFIER=io.github.hosseinkarami_dev.penny.Penny$(TEAM_ID)
 
 CURRENT_PROJECT_VERSION=1
 MARKETING_VERSION=1.0
