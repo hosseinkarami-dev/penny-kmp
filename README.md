@@ -2,6 +2,16 @@
 
 Penny is an offline-first personal finance app for Android and iOS, built with Kotlin Multiplatform and Compose Multiplatform. Financial records live on the device in a Room database. The database is the source of truth; screens react to its flows, and there is no backend, account, or network dependency.
 
+
+## Screenshots
+
+<p align="center">
+  <img src="./screenshot-android-1.png" width="300" alt="Penny Android app preview" />
+  <img src="./screenshot-android-2.png" width="300" alt="Penny Android app preview" />
+  <img src="./screenshot-android-3.png" width="300" alt="Penny Android app preview" />
+  <img src="./screenshot-android-4.png" width="300" alt="Penny Android app preview" />
+</p>
+
 ## What’s here
 
 - Shared Compose dashboard for Android and iOS
