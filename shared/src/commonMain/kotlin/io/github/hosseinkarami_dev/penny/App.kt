@@ -34,6 +34,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.TextStyle
@@ -65,10 +67,10 @@ import io.github.hosseinkarami_dev.penny.domain.usecase.WasBudgetReminderSent
 import io.github.hosseinkarami_dev.penny.domain.usecase.MarkBudgetReminderSent
 import io.github.hosseinkarami_dev.penny.domain.usecase.ClearBudgetReminderMarkers
 import io.github.hosseinkarami_dev.penny.domain.usecase.SaveBudget
-import io.github.hosseinkarami_dev.penny.domain.usecase.monthKey
 import io.github.hosseinkarami_dev.penny.domain.usecase.SaveRecurringRule
 import io.github.hosseinkarami_dev.penny.domain.usecase.DeleteRecurringRule
 import io.github.hosseinkarami_dev.penny.domain.usecase.nextRecurringOccurrence
+import io.github.hosseinkarami_dev.penny.domain.usecase.monthKey
 import io.github.hosseinkarami_dev.penny.domain.usecase.ObserveAppearanceMode
 import io.github.hosseinkarami_dev.penny.domain.usecase.SetAppearanceMode
 import io.github.hosseinkarami_dev.penny.domain.usecase.ObserveDisplayCurrency
@@ -105,6 +107,21 @@ private val Mint: Color @Composable get() = MaterialTheme.colorScheme.secondaryC
 private val Coral: Color @Composable get() = MaterialTheme.colorScheme.error
 private val LocalCurrency = staticCompositionLocalOf { DisplayCurrency.USD }
 private val LocalAppLanguage = staticCompositionLocalOf { AppLanguage.ENGLISH }
+
+private enum class ToastTone { SUCCESS, INFO, ERROR }
+private enum class AppLockChangeResult { UPDATED, VERIFICATION_FAILED, SAVE_FAILED }
+
+private fun toastTone(message: String): ToastTone {
+    val normalized = message.lowercase()
+    val errorTerms = listOf(
+        "could not", "couldn't", "failed", "failure", "error", "exception", "invalid",
+        "unable", "denied", "not found", "does not match", "do not match", "incorrect",
+        "wrong passphrase", "corrupt", "damaged", "unsupported",
+    )
+    if (errorTerms.any(normalized::contains)) return ToastTone.ERROR
+    if (normalized.startsWith("choose ") || normalized.startsWith("select ")) return ToastTone.INFO
+    return ToastTone.SUCCESS
+}
 
 @Composable
 private fun Text(
@@ -229,7 +246,7 @@ private val persianLabels = mapOf(
     "Give this category a name. You can use it for transactions and budgets." to "برای دسته‌بندی نامی انتخاب کنید تا در تراکنش‌ها و بودجه‌ها استفاده شود.",
     "Display currency" to "واحد پول", "Changing this updates the currency label across your ledger. Amounts are not converted." to "واحد پول در برنامه تغییر می‌کند؛ مبلغ‌های ثبت‌شده تبدیل نمی‌شوند.",
     "Choose a theme" to "انتخاب پوسته", "System" to "سیستم", "Light" to "روشن", "Dark" to "تیره", "Language" to "زبان", "English" to "انگلیسی", "Persian" to "فارسی",
-    "Upcoming recurring transactions and budgets nearing their limit" to "یادآوری تراکنش‌های دوره‌ای و نزدیک‌شدن بودجه به سقف", "Enable reminders" to "فعال‌سازی یادآوری‌ها", "Categories" to "دسته‌بندی‌ها",
+    "Upcoming recurring transactions and budgets nearing their limit" to "یادآوری تراکنش‌های دوره‌ای و بودجه‌های نزدیک به سقف", "Enable reminders" to "فعال‌سازی یادآوری‌ها", "Categories" to "دسته‌بندی‌ها",
     "Manage categories" to "مدیریت دسته‌بندی‌ها", "Backup & restore" to "پشتیبان‌گیری و بازیابی", "Create backup" to "ایجاد نسخه پشتیبان",
     "Restore backup" to "بازیابی نسخه پشتیبان", "Export CSV" to "خروجی CSV", "Share CSV" to "اشتراک‌گذاری CSV", "Clear filters" to "پاک کردن فیلترها",
     "No transactions found" to "تراکنشی پیدا نشد", "Budget" to "بودجه", "Save budget" to "ذخیره بودجه", "Add budget" to "افزودن بودجه",
@@ -352,12 +369,18 @@ fun App() {
                     categories = categories,
                     onSaveCategories = { values -> settingsScope.launch { saveCategories(values) } },
                     appLockEnabled = appLockEnabled,
-                    onAppLockEnabledChange = { enabled ->
+                    onAppLockEnabledChange = { enabled, onResult ->
                         authenticateDevice { success ->
                             if (success) {
                                 keepSessionUnlocked = true
                                 isUnlocked = true
-                                settingsScope.launch { setAppLock(enabled) }
+                                settingsScope.launch {
+                                    runCatching { setAppLock(enabled) }
+                                        .onSuccess { onResult(AppLockChangeResult.UPDATED) }
+                                        .onFailure { onResult(AppLockChangeResult.SAVE_FAILED) }
+                                }
+                            } else {
+                                onResult(AppLockChangeResult.VERIFICATION_FAILED)
                             }
                         }
                     },
@@ -381,7 +404,7 @@ private fun DashboardScreen(
     categories: List<FinanceCategory>,
     onSaveCategories: (List<FinanceCategory>) -> Unit,
     appLockEnabled: Boolean,
-    onAppLockEnabledChange: (Boolean) -> Unit,
+    onAppLockEnabledChange: (Boolean, (AppLockChangeResult) -> Unit) -> Unit,
     viewModel: DashboardViewModel = koinInject(),
     saveTransaction: SaveTransaction = koinInject(),
     saveBudget: SaveBudget = koinInject(),
@@ -399,7 +422,6 @@ private fun DashboardScreen(
     val recurringRules by viewModel.recurringRules.collectAsState()
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
-    var showAdd by remember { mutableStateOf(false) }
     var showAddCategory by remember { mutableStateOf(false) }
     var showCreateBackup by remember { mutableStateOf(false) }
     var showRestoreBackup by remember { mutableStateOf(false) }
@@ -411,6 +433,7 @@ private fun DashboardScreen(
     var recurringRulePendingDelete by remember { mutableStateOf<RecurringRule?>(null) }
     var recurringRuleBeingEdited by remember { mutableStateOf<RecurringRule?>(null) }
     var selectedTab by remember { mutableStateOf("Home") }
+    var transactionEditorOrigin by remember { mutableStateOf("Home") }
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     val contentScrollState = rememberScrollState()
     var previousScrollPosition by remember { mutableIntStateOf(0) }
@@ -488,15 +511,18 @@ private fun DashboardScreen(
     }
     Scaffold(modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection), containerColor = Canvas, snackbarHost = {}, topBar = {
         Surface(color = if (hasScrolled) MaterialTheme.colorScheme.surface else Canvas, shadowElevation = if (hasScrolled) 6.dp else 0.dp) {
-            if (selectedTab == "Categories") {
+            if (selectedTab in setOf("Categories", "TransactionEditor", "Backup", "Scheduled")) {
+                val isTransactionEditor = selectedTab == "TransactionEditor"
+                val isBackup = selectedTab == "Backup"
+                val isScheduled = selectedTab == "Scheduled"
                 TopAppBar(
                     title = {
                         Column {
-                            Text("Categories", color = Ink, fontSize = 18.sp, lineHeight = 21.sp, fontWeight = FontWeight.Bold)
-                            Text("Manage your budget and transaction labels", color = Muted, fontSize = 10.sp, lineHeight = 13.sp)
+                            Text(when { isTransactionEditor -> if (transactionBeingEdited == null) "Add transaction" else "Edit transaction"; isBackup -> "Backup & restore"; isScheduled -> "Scheduled transactions"; else -> "Categories" }, color = Ink, fontSize = 18.sp, lineHeight = 21.sp, fontWeight = FontWeight.Bold)
+                            Text(when { isTransactionEditor -> "Record the details of your transaction"; isBackup -> "Keep a secure copy of your Penny data"; isScheduled -> "Manage transactions you repeat"; else -> "Manage your budget and transaction labels" }, color = Muted, fontSize = 10.sp, lineHeight = 13.sp)
                         }
                     },
-                    navigationIcon = { IconButton(onClick = { selectedTab = "Settings" }) { PennyIcon("arrow-left", tint = Ink, modifier = Modifier.size(21.dp)) } },
+                    navigationIcon = { IconButton(onClick = { selectedTab = if (isTransactionEditor) transactionEditorOrigin else "Settings" }) { PennyIcon("arrow-left", tint = Ink, modifier = Modifier.size(21.dp), contentDescription = localize("Back", LocalAppLanguage.current)) } },
                     actions = {},
                     scrollBehavior = scrollBehavior,
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, scrolledContainerColor = Color.Transparent),
@@ -514,6 +540,7 @@ private fun DashboardScreen(
         }
     }, floatingActionButton = {
         AnimatedVisibility(visible = selectedTab in setOf("Home", "Activity", "Categories") && fabVisible, enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()) {
+            val fabDescription = localize(if (selectedTab == "Categories") "Add category" else "Add transaction", LocalAppLanguage.current)
             FloatingActionButton(
                 onClick = {
                     if (selectedTab == "Categories") {
@@ -522,22 +549,25 @@ private fun DashboardScreen(
                         showAddCategory = true
                     } else {
                         transactionBeingEdited = null
-                        showAdd = true
+                        transactionEditorOrigin = selectedTab
+                        selectedTab = "TransactionEditor"
                     }
                 },
                 containerColor = Green,
                 contentColor = Color.White,
                 elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 7.dp, pressedElevation = 10.dp),
                 shape = CircleShape,
-                modifier = Modifier.size(60.dp),
+                modifier = Modifier.size(60.dp).semantics {
+                    contentDescription = fabDescription
+                },
             ) {
                 AnimatedContent(targetState = selectedTab == "Categories", label = "fab-action-icon") { addingCategory ->
-                    PennyIcon(if (addingCategory) "shape-plus" else "plus", tint = Color.White, modifier = Modifier.size(25.dp))
+                    PennyIcon(if (addingCategory) "plus" else "plus", tint = Color.White, modifier = Modifier.size(25.dp))
                 }
             }
         }
     }, bottomBar = {
-        Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 12.dp) {
+        if (selectedTab !in setOf("TransactionEditor", "Categories", "Backup", "Scheduled")) Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 12.dp) {
             Column {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .55f), thickness = 1.dp)
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
@@ -561,8 +591,50 @@ private fun DashboardScreen(
             }
         }
     }) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-        Column(Modifier.fillMaxSize().verticalScroll(contentScrollState).padding(horizontal = 22.dp)) {
+        Box(
+            Modifier.fillMaxSize()
+                .padding(
+                    top = padding.calculateTopPadding(),
+                    bottom = if (selectedTab == "TransactionEditor") 0.dp else padding.calculateBottomPadding(),
+                ),
+        ) {
+        if (selectedTab == "Backup") {
+            BackupManagementScreen(
+                onCreateBackup = { showCreateBackup = true },
+                onRestoreBackup = {
+                    pickEncryptedBackup { contents ->
+                        if (contents == null) scope.launch { snackbarHostState.showSnackbar("Could not open the selected backup") }
+                        else { restoreBackupContents = contents; showRestoreBackup = true }
+                    }
+                },
+            )
+        } else if (selectedTab == "TransactionEditor") {
+            AddTransactionScreen(
+                initialTransaction = transactionBeingEdited,
+                categories = categories.map { it.name },
+                onDismiss = { transactionBeingEdited = null; selectedTab = transactionEditorOrigin },
+                onSave = { transaction, frequency ->
+                    val wasEditing = transactionBeingEdited != null
+                    scope.launch {
+                        runCatching {
+                            saveTransaction(transaction)
+                            frequency?.let { selected ->
+                                saveRecurringRule(RecurringRule(
+                                    id = "recurring_${transaction.id}", title = transaction.title, amountMinor = transaction.amountMinor,
+                                    type = transaction.type, category = transaction.category, frequency = selected,
+                                    nextDueAtEpochMillis = nextRecurringOccurrence(selected, transaction.occurredAtEpochMillis),
+                                ))
+                            }
+                            if (frequency == null && wasEditing) deleteRecurringRule("recurring_${transaction.id}")
+                        }.onSuccess {
+                            transactionBeingEdited = null
+                            selectedTab = transactionEditorOrigin
+                            snackbarHostState.showSnackbar(if (wasEditing) "Transaction updated" else "Transaction saved")
+                        }.onFailure { snackbarHostState.showSnackbar("Could not save transaction") }
+                    }
+                },
+            )
+        } else Column(Modifier.fillMaxSize().verticalScroll(contentScrollState).padding(horizontal = 22.dp)) {
             Spacer(Modifier.height(14.dp))
             when (selectedTab) {
                 "Activity" -> ActivityContent(
@@ -577,11 +649,24 @@ private fun DashboardScreen(
                             scope.launch { snackbarHostState.showSnackbar("CSV is ready to share") }
                         }
                     },
-                    onEdit = { transaction -> transactionBeingEdited = transaction; showAdd = true },
+                    onEdit = { transaction -> transactionBeingEdited = transaction; transactionEditorOrigin = "Activity"; selectedTab = "TransactionEditor" },
                     onDelete = { transaction -> transactionPendingDelete = transaction },
                 )
                 "Insights" -> CategoryInsights(transactions, budgets, categories.map { it.name }, onSaveBudget = { budget -> scope.launch { runCatching { saveBudget(budget) }.onSuccess { snackbarHostState.showSnackbar("Budget saved") }.onFailure { snackbarHostState.showSnackbar("Could not save budget") } } })
-                "Settings" -> ProfileContent(appearanceMode, { mode -> onAppearanceModeChange(mode); scope.launch { snackbarHostState.showSnackbar("Theme updated") } }, currency, { value -> onCurrencyChange(value); scope.launch { snackbarHostState.showSnackbar("Currency updated") } }, language, { value -> onLanguageChange(value); scope.launch { snackbarHostState.showSnackbar("Language updated") } }, remindersEnabled, onRemindersEnabledChange, recurringRules, appLockEnabled, onAppLockEnabledChange, onManageCategories = { selectedTab = "Categories" }, onManageBackup = { showCreateBackup = true }, onEditRule = { recurringRuleBeingEdited = it }, onDeleteRule = { id -> recurringRulePendingDelete = recurringRules.firstOrNull { it.id == id } })
+                "Scheduled" -> ScheduledTransactionsScreen(
+                    rules = recurringRules,
+                    onEdit = { recurringRuleBeingEdited = it },
+                    onDelete = { recurringRulePendingDelete = it },
+                )
+                "Settings" -> ProfileContent(appearanceMode, { mode -> onAppearanceModeChange(mode); scope.launch { snackbarHostState.showSnackbar("Theme updated") } }, currency, { value -> onCurrencyChange(value); scope.launch { snackbarHostState.showSnackbar("Currency updated") } }, language, { value -> onLanguageChange(value); scope.launch { snackbarHostState.showSnackbar("Language updated") } }, remindersEnabled, onRemindersEnabledChange, appLockEnabled, onAppLockEnabledChange = { enabled, onResult -> onAppLockEnabledChange(enabled) { result ->
+                    onResult(result)
+                    val message = when (result) {
+                        AppLockChangeResult.UPDATED -> "App lock updated"
+                        AppLockChangeResult.VERIFICATION_FAILED -> "Device verification failed. Check your screen lock or biometric settings and try again."
+                        AppLockChangeResult.SAVE_FAILED -> "Could not update app lock"
+                    }
+                    scope.launch { snackbarHostState.showSnackbar(message) }
+                } }, onManageCategories = { selectedTab = "Categories" }, onManageBackup = { selectedTab = "Backup" })
                 "Categories" -> CategoryManagementScreen(
                     categories = categories,
                     used = transactions.map { it.category }.toSet() + budgets.map { it.budget.category } + recurringRules.map { it.category },
@@ -601,15 +686,13 @@ private fun DashboardScreen(
                     }
                     Spacer(Modifier.height(12.dp))
                     if (summary.recentTransactions.isEmpty()) EmptyState() else summary.recentTransactions.forEach { transaction ->
-                        TransactionRow(transaction, onEdit = { transactionBeingEdited = transaction; showAdd = true }, onDelete = { transactionPendingDelete = transaction })
+                        TransactionRow(transaction, onEdit = { transactionBeingEdited = transaction; transactionEditorOrigin = "Home"; selectedTab = "TransactionEditor" }, onDelete = { transactionPendingDelete = transaction })
                         Spacer(Modifier.height(8.dp))
                     }
                     Spacer(Modifier.height(20.dp))
                     InsightsCard(summary.expenseMinor, summary.incomeMinor)
-                    if (recurringRules.isNotEmpty()) {
-                        Spacer(Modifier.height(14.dp))
-                        UpcomingRecurringCard(recurringRules)
-                    }
+                    Spacer(Modifier.height(14.dp))
+                    UpcomingRecurringCard(recurringRules, onManage = { selectedTab = "Scheduled" })
                 }
             }
             Spacer(Modifier.height(22.dp))
@@ -618,42 +701,51 @@ private fun DashboardScreen(
             hostState = snackbarHostState,
             modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         ) { snackbarData ->
-            val isError = snackbarData.visuals.message.startsWith("Could not")
+            val tone = toastTone(snackbarData.visuals.message)
+            val accent = when (tone) {
+                ToastTone.SUCCESS -> MaterialTheme.colorScheme.secondary
+                ToastTone.INFO -> MaterialTheme.colorScheme.primary
+                ToastTone.ERROR -> MaterialTheme.colorScheme.error
+            }
+            val iconContainer = when (tone) {
+                ToastTone.SUCCESS -> MaterialTheme.colorScheme.secondaryContainer
+                ToastTone.INFO -> MaterialTheme.colorScheme.primaryContainer
+                ToastTone.ERROR -> MaterialTheme.colorScheme.errorContainer
+            }
+            val iconTint = when (tone) {
+                ToastTone.SUCCESS -> MaterialTheme.colorScheme.onSecondaryContainer
+                ToastTone.INFO -> MaterialTheme.colorScheme.onPrimaryContainer
+                ToastTone.ERROR -> MaterialTheme.colorScheme.onErrorContainer
+            }
+            val iconName = when (tone) {
+                ToastTone.SUCCESS -> "check"
+                ToastTone.INFO -> "information-outline"
+                ToastTone.ERROR -> "alert-circle-outline"
+            }
             Surface(
                 shape = RoundedCornerShape(18.dp),
                 color = MaterialTheme.colorScheme.surface,
                 shadowElevation = 12.dp,
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f)),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (tone == ToastTone.ERROR) accent.copy(alpha = .35f)
+                    else MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f),
+                ),
                 modifier = Modifier.fillMaxWidth().widthIn(max = 440.dp),
             ) {
                 Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
-                    Surface(shape = CircleShape, color = if (isError) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(34.dp)) {
+                    Surface(shape = CircleShape, color = iconContainer, modifier = Modifier.size(34.dp)) {
                         Box(contentAlignment = Alignment.Center) {
-                            PennyIcon(if (isError) "alert-circle-outline" else "check", tint = if (isError) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(18.dp))
+                            PennyIcon(iconName, tint = iconTint, modifier = Modifier.size(18.dp))
                         }
                     }
-                    Text(snackbarData.visuals.message, modifier = Modifier.weight(1f), color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                    IconButton(onClick = { snackbarData.dismiss() }, modifier = Modifier.size(30.dp)) { PennyIcon("close", tint = Muted, modifier = Modifier.size(16.dp)) }
+                    Text(snackbarData.visuals.message, modifier = Modifier.weight(1f), color = if (tone == ToastTone.ERROR) accent else Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    IconButton(onClick = { snackbarData.dismiss() }, modifier = Modifier.size(40.dp)) { PennyIcon("close", tint = Muted, modifier = Modifier.size(16.dp), contentDescription = localize("Dismiss message", LocalAppLanguage.current)) }
                 }
             }
         }
         }
     }
-    if (showAdd) AddTransactionDialog(initialTransaction = transactionBeingEdited, categories = categories.map { it.name }, onDismiss = { showAdd = false; transactionBeingEdited = null }, onSave = { transaction, frequency ->
-        val wasEditing = transactionBeingEdited != null
-        scope.launch {
-            runCatching {
-                saveTransaction(transaction)
-                frequency?.let { selected ->
-                    saveRecurringRule(RecurringRule(
-                        id = "recurring_${transaction.id}", title = transaction.title, amountMinor = transaction.amountMinor,
-                        type = transaction.type, category = transaction.category, frequency = selected,
-                        nextDueAtEpochMillis = nextRecurringOccurrence(selected, transaction.occurredAtEpochMillis),
-                    ))
-                }
-            }.onSuccess { showAdd = false; transactionBeingEdited = null; snackbarHostState.showSnackbar(if (wasEditing) "Transaction updated" else "Transaction saved") }.onFailure { snackbarHostState.showSnackbar("Could not save transaction") }
-        }
-    })
     if (showAddCategory) {
         AlertDialog(
             onDismissRequest = { showAddCategory = false },
@@ -719,13 +811,6 @@ private fun DashboardScreen(
             },
             dismissButton = {
                 Row {
-                    TextButton(onClick = {
-                        showCreateBackup = false
-                        pickEncryptedBackup { contents ->
-                            if (contents == null) scope.launch { snackbarHostState.showSnackbar("Could not open the selected backup") }
-                            else { restoreBackupContents = contents; showRestoreBackup = true }
-                        }
-                    }) { Text("Restore from file") }
                     TextButton(onClick = { showCreateBackup = false }) { Text("Cancel", color = Muted) }
                 }
             },
@@ -756,16 +841,6 @@ private fun DashboardScreen(
             dismissButton = { TextButton(onClick = { showRestoreBackup = false; restoreBackupContents = null }) { Text("Cancel", color = Muted) } },
         )
     }
-    recurringRuleBeingEdited?.let { rule ->
-        RecurringRuleEditDialog(rule, onDismiss = { recurringRuleBeingEdited = null }, onSave = { amountMinor, frequency, dueAt ->
-            scope.launch {
-                runCatching { saveRecurringRule(rule.copy(amountMinor = amountMinor, frequency = frequency, nextDueAtEpochMillis = dueAt)) }
-                    .onSuccess { snackbarHostState.showSnackbar("Recurring schedule updated") }
-                    .onFailure { snackbarHostState.showSnackbar("Could not update recurring schedule") }
-            }
-            recurringRuleBeingEdited = null
-        })
-    }
     transactionPendingDelete?.let { transaction ->
         AlertDialog(
             onDismissRequest = { transactionPendingDelete = null },
@@ -779,10 +854,33 @@ private fun DashboardScreen(
             dismissButton = { TextButton(onClick = { transactionPendingDelete = null }) { Text("Cancel") } },
         )
     }
+    recurringRuleBeingEdited?.let { rule ->
+        RecurringRuleEditDialog(rule, onDismiss = { recurringRuleBeingEdited = null }, onSave = { amountMinor, frequency, dueAt ->
+            scope.launch {
+                runCatching { saveRecurringRule(rule.copy(amountMinor = amountMinor, frequency = frequency, nextDueAtEpochMillis = dueAt)) }
+                    .onSuccess { snackbarHostState.showSnackbar("Recurring schedule updated") }
+                    .onFailure { snackbarHostState.showSnackbar("Could not update recurring schedule") }
+            }
+            recurringRuleBeingEdited = null
+        })
+    }
     recurringRulePendingDelete?.let { rule ->
-        AlertDialog(onDismissRequest = { recurringRulePendingDelete = null }, title = { Text("Delete recurring transaction?") }, text = { Text("${rule.title} · ${formatMoney(rule.amountMinor)}") }, confirmButton = {
-            TextButton(onClick = { scope.launch { runCatching { deleteRecurringRule(rule.id) }.onSuccess { snackbarHostState.showSnackbar("Recurring transaction deleted") }.onFailure { snackbarHostState.showSnackbar("Could not delete recurring transaction") } }; recurringRulePendingDelete = null }) { Text("Delete", color = Coral) }
-        }, dismissButton = { TextButton(onClick = { recurringRulePendingDelete = null }) { Text("Cancel") } })
+        AlertDialog(
+            onDismissRequest = { recurringRulePendingDelete = null },
+            title = { Text("Delete recurring transaction?") },
+            text = { Text("${rule.title} · ${formatMoney(rule.amountMinor)}") },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        runCatching { deleteRecurringRule(rule.id) }
+                            .onSuccess { snackbarHostState.showSnackbar("Recurring transaction deleted") }
+                            .onFailure { snackbarHostState.showSnackbar("Could not delete recurring transaction") }
+                    }
+                    recurringRulePendingDelete = null
+                }) { Text("Delete", color = Coral) }
+            },
+            dismissButton = { TextButton(onClick = { recurringRulePendingDelete = null }) { Text("Cancel") } },
+        )
     }
 }
 
@@ -824,12 +922,12 @@ private fun ActivityContent(transactions: List<MoneyTransaction>, onExport: (Lis
             modifier = Modifier.weight(1f),
             placeholder = { Text("Search transactions", fontSize = 13.sp) },
             leadingIcon = { PennyIcon("magnify", tint = Muted, modifier = Modifier.size(19.dp)) },
-            trailingIcon = if (query.isNotEmpty()) ({ IconButton(onClick = { query = "" }) { PennyIcon("close", tint = Muted, modifier = Modifier.size(17.dp)) } }) else null,
+            trailingIcon = if (query.isNotEmpty()) ({ IconButton(onClick = { query = "" }) { PennyIcon("close", tint = Muted, modifier = Modifier.size(17.dp), contentDescription = localize("Clear search", LocalAppLanguage.current)) } }) else null,
             singleLine = true,
             shape = RoundedCornerShape(16.dp),
         )
         FilledTonalIconButton(onClick = { filtersExpanded = !filtersExpanded }, shape = RoundedCornerShape(15.dp)) {
-            PennyIcon(if (filtersExpanded) "tune-variant" else "filter-variant", tint = if (categoryFilter != null || activityPeriod != ActivityPeriod.ALL) Green else Ink, modifier = Modifier.size(20.dp))
+            PennyIcon(if (filtersExpanded) "tune-variant" else "filter-variant", tint = if (categoryFilter != null || activityPeriod != ActivityPeriod.ALL) Green else Ink, modifier = Modifier.size(20.dp), contentDescription = localize("Filters", LocalAppLanguage.current))
         }
     }
     Spacer(Modifier.height(9.dp))
@@ -1157,7 +1255,7 @@ private fun CategoryManager(categories: List<FinanceCategory>, used: Set<String>
                                 Text("IN USE", color = Muted, fontSize = 9.sp, letterSpacing = .5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp))
                             }
                         } else {
-                            IconButton(onClick = { pendingDelete = category }, modifier = Modifier.size(42.dp)) { PennyIcon("delete-outline", tint = Coral, modifier = Modifier.size(19.dp)) }
+                            IconButton(onClick = { pendingDelete = category }, modifier = Modifier.size(42.dp)) { PennyIcon("delete-outline", tint = Coral, modifier = Modifier.size(19.dp), contentDescription = localize("Delete category", LocalAppLanguage.current)) }
                         }
                     }
                     if (index < categories.lastIndex) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))
@@ -1185,6 +1283,70 @@ private fun CategorySettingsEntry(onClick: () -> Unit) {
                 Text("Create and organize your spending labels", color = Muted, fontSize = 11.sp)
             }
             PennyIcon("chevron-right", tint = Muted, modifier = Modifier.size(19.dp))
+        }
+    }
+}
+
+@Composable
+private fun BackupManagementScreen(onCreateBackup: () -> Unit, onRestoreBackup: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Spacer(Modifier.height(8.dp))
+        Card(
+            shape = RoundedCornerShape(26.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+        ) {
+            Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface.copy(alpha = .75f), modifier = Modifier.size(54.dp)) {
+                    Box(contentAlignment = Alignment.Center) { PennyIcon("shield-lock-outline", tint = Green, modifier = Modifier.size(27.dp)) }
+                }
+                Column(Modifier.weight(1f)) {
+                    Text("Your finances, protected", color = Ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Spacer(Modifier.height(4.dp))
+                    Text("Create a passphrase-protected backup or restore your data from a backup file.", color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
+                }
+            }
+        }
+        BackupActionCard(
+            icon = "cloud-download-outline",
+            title = "Create a backup",
+            description = "Save an encrypted copy of your transactions, budgets, categories, and settings.",
+            action = "Create backup",
+            onClick = onCreateBackup,
+        )
+        BackupActionCard(
+            icon = "backup-restore",
+            title = "Restore a backup",
+            description = "Choose a Penny backup file and enter its passphrase to restore your data.",
+            action = "Choose backup file",
+            onClick = onRestoreBackup,
+        )
+        Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .58f)) {
+            Row(Modifier.fillMaxWidth().padding(15.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
+                PennyIcon("information-outline", tint = Muted, modifier = Modifier.size(18.dp))
+                Text("Keep your backup passphrase somewhere safe. Penny cannot recover a forgotten passphrase.", color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun BackupActionCard(icon: String, title: String, description: String, action: String, onClick: () -> Unit) {
+    Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(11.dp), verticalAlignment = Alignment.CenterVertically) {
+                Surface(shape = RoundedCornerShape(13.dp), color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(42.dp)) {
+                    Box(contentAlignment = Alignment.Center) { PennyIcon(icon, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(21.dp)) }
+                }
+                Text(title, color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            }
+            Text(description, color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
+            Button(onClick = onClick, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(15.dp)) {
+                Text(action, fontWeight = FontWeight.SemiBold)
+            }
         }
     }
 }
@@ -1272,13 +1434,10 @@ private fun ProfileContent(
     onLanguageChange: (AppLanguage) -> Unit,
     remindersEnabled: Boolean,
     onRemindersEnabledChange: (Boolean) -> Unit,
-    rules: List<RecurringRule>,
     appLockEnabled: Boolean,
-    onAppLockEnabledChange: (Boolean) -> Unit,
+    onAppLockEnabledChange: (Boolean, (AppLockChangeResult) -> Unit) -> Unit,
     onManageCategories: () -> Unit,
     onManageBackup: () -> Unit,
-    onEditRule: (RecurringRule) -> Unit,
-    onDeleteRule: (String) -> Unit,
 ) {
     Text("Settings", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Ink, letterSpacing = (-.6).sp)
     Spacer(Modifier.height(5.dp))
@@ -1341,48 +1500,53 @@ private fun ProfileContent(
     Spacer(Modifier.height(14.dp))
     CategorySettingsEntry(onClick = onManageCategories)
     Spacer(Modifier.height(14.dp))
-    AppLockSetting(appLockEnabled, onAppLockEnabledChange)
-    Spacer(Modifier.height(14.dp))
     BackupSettingsEntry(onClick = onManageBackup)
-    Spacer(Modifier.height(22.dp))
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text("RECURRING", color = Muted, fontSize = 10.sp, letterSpacing = 1.3.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.width(8.dp))
-        Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = CircleShape) { Text("${rules.size}", color = MaterialTheme.colorScheme.onSecondaryContainer, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)) }
-    }
-    Spacer(Modifier.height(9.dp))
-    if (rules.isEmpty()) {
-        Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-            Row(Modifier.fillMaxWidth().padding(17.dp), verticalAlignment = Alignment.CenterVertically) {
-                PennyIcon("calendar-refresh-outline", tint = Green, modifier = Modifier.size(24.dp))
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text("Nothing scheduled yet", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    Text("Choose a repeat schedule when adding a transaction.", color = Muted, fontSize = 11.sp)
+    Spacer(Modifier.height(14.dp))
+    AppLockSetting(appLockEnabled, onAppLockEnabledChange)
+}
+
+@Composable
+private fun ScheduledTransactionsScreen(
+    rules: List<RecurringRule>,
+    onEdit: (RecurringRule) -> Unit,
+    onDelete: (RecurringRule) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (rules.isEmpty()) {
+            Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    PennyIcon("calendar-refresh-outline", tint = Green, modifier = Modifier.size(25.dp))
+                    Text("Nothing scheduled yet", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Choose a repeat schedule when adding a transaction.", color = Muted, fontSize = 12.sp)
                 }
             }
-        }
-    } else rules.forEach { rule ->
-        Card(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-            Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
-                Surface(shape = RoundedCornerShape(13.dp), color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(42.dp)) {
-                    Box(contentAlignment = Alignment.Center) { PennyIcon("calendar-refresh-outline", tint = Green, modifier = Modifier.size(20.dp)) }
+        } else rules.sortedBy { it.nextDueAtEpochMillis }.forEach { rule ->
+            Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Row(Modifier.fillMaxWidth().padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Surface(shape = RoundedCornerShape(13.dp), color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(42.dp)) {
+                        Box(contentAlignment = Alignment.Center) { PennyIcon(categoryIcon(rule.category, rule.type), tint = Green, modifier = Modifier.size(20.dp)) }
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(rule.title, color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("${rule.frequency.name.lowercase().replaceFirstChar { it.uppercase() }} · ${rule.category}", color = Muted, fontSize = 11.sp)
+                        Text("Next · ${isoDateForEpoch(rule.nextDueAtEpochMillis)}", color = Muted, fontSize = 10.sp)
+                    }
+                    Text(formatMoney(rule.amountMinor), color = if (rule.type == TransactionType.INCOME) Green else Ink, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    IconButton(onClick = { onEdit(rule) }, modifier = Modifier.size(40.dp)) {
+                        PennyIcon("pencil-outline", tint = Green, modifier = Modifier.size(18.dp), contentDescription = localize("Edit recurring transaction", LocalAppLanguage.current))
+                    }
+                    IconButton(onClick = { onDelete(rule) }, modifier = Modifier.size(40.dp)) {
+                        PennyIcon("delete-outline", tint = Coral, modifier = Modifier.size(20.dp), contentDescription = localize("Delete recurring transaction", LocalAppLanguage.current))
+                    }
                 }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(rule.title, color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                    Text("${rule.frequency.name.lowercase().replaceFirstChar { it.uppercase() }} · ${rule.category} · ${formatMoney(rule.amountMinor)}", color = Muted, fontSize = 11.sp)
-                    Text("Next · ${isoDateForEpoch(rule.nextDueAtEpochMillis)}", color = if (rule.nextDueAtEpochMillis <= Clock.System.now().toEpochMilliseconds() + 7 * 86_400_000L) Green else Muted, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-                }
-                IconButton(onClick = { onEditRule(rule) }, modifier = Modifier.size(36.dp)) { PennyIcon("pencil-outline", tint = Green, modifier = Modifier.size(18.dp)) }
-                IconButton(onClick = { onDeleteRule(rule.id) }) { PennyIcon("delete-outline", tint = Coral, modifier = Modifier.size(20.dp)) }
             }
         }
     }
 }
 
 @Composable
-private fun AppLockSetting(enabled: Boolean, onEnabledChange: (Boolean) -> Unit) {
+private fun AppLockSetting(enabled: Boolean, onEnabledChange: (Boolean, (AppLockChangeResult) -> Unit) -> Unit) {
     Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
             Surface(shape = RoundedCornerShape(13.dp), color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(40.dp)) {
@@ -1393,7 +1557,7 @@ private fun AppLockSetting(enabled: Boolean, onEnabledChange: (Boolean) -> Unit)
                 Text("App lock", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 Text("Require your device authentication", color = Muted, fontSize = 11.sp)
             }
-            Switch(checked = enabled, onCheckedChange = onEnabledChange)
+            Switch(checked = enabled, onCheckedChange = { requested -> onEnabledChange(requested) { } })
         }
     }
 }
@@ -1412,32 +1576,6 @@ private fun AppLockScreen(onUnlock: () -> Unit) {
         Button(onClick = onUnlock, shape = RoundedCornerShape(16.dp)) {
             PennyIcon("fingerprint", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(19.dp))
             Spacer(Modifier.width(8.dp)); Text("Unlock Penny")
-        }
-    }
-}
-
-@Composable
-private fun UpcomingRecurringCard(rules: List<RecurringRule>) {
-    Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.fillMaxWidth().padding(16.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Column { Text("Coming up", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold); Text("Scheduled transactions", color = Muted, fontSize = 10.sp) }
-                PennyIcon("calendar-clock-outline", tint = Green, modifier = Modifier.size(19.dp))
-            }
-            Spacer(Modifier.height(8.dp))
-            rules.sortedBy { it.nextDueAtEpochMillis }.take(3).forEach { rule ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(32.dp)) {
-                        Box(contentAlignment = Alignment.Center) { PennyIcon(categoryIcon(rule.category, rule.type), tint = Green, modifier = Modifier.size(16.dp)) }
-                    }
-                    Spacer(Modifier.width(9.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(rule.title, color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text("${rule.frequency.name.lowercase().replaceFirstChar { it.uppercase() }} · ${isoDateForEpoch(rule.nextDueAtEpochMillis)}", color = Muted, fontSize = 10.sp)
-                    }
-                    Text(formatMoney(rule.amountMinor), color = if (rule.type == TransactionType.INCOME) Green else Ink, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-            }
         }
     }
 }
@@ -1577,6 +1715,39 @@ private fun InsightsCard(expense: Long, income: Long) {
 }
 
 @Composable
+private fun UpcomingRecurringCard(rules: List<RecurringRule>, onManage: () -> Unit) {
+    Card(onClick = onManage, shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column {
+                    Text("Coming up", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text("Scheduled transactions", color = Muted, fontSize = 10.sp)
+                }
+                PennyIcon("calendar-clock-outline", tint = Green, modifier = Modifier.size(19.dp))
+            }
+            Spacer(Modifier.height(8.dp))
+            if (rules.isEmpty()) {
+                Text("Nothing scheduled yet", color = Muted, fontSize = 11.sp)
+            } else rules.sortedBy { it.nextDueAtEpochMillis }.take(3).forEach { rule ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(32.dp)) {
+                        Box(contentAlignment = Alignment.Center) { PennyIcon(categoryIcon(rule.category, rule.type), tint = Green, modifier = Modifier.size(16.dp)) }
+                    }
+                    Spacer(Modifier.width(9.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(rule.title, color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("${rule.frequency.name.lowercase().replaceFirstChar { it.uppercase() }} · ${isoDateForEpoch(rule.nextDueAtEpochMillis)}", color = Muted, fontSize = 10.sp)
+                    }
+                    Text(formatMoney(rule.amountMinor), color = if (rule.type == TransactionType.INCOME) Green else Ink, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Text("Manage scheduled transactions  ›", color = Green, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
 private fun MetricBar(label: String, value: Long, total: Long, color: Color) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(label, color = Muted, fontSize = 11.sp); Text(formatMoney(value), color = Ink, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
     Spacer(Modifier.height(6.dp)); LinearProgressIndicator(progress = { if (total == 0L) 0f else (value.toFloat() / total).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(6.dp), color = color, trackColor = color.copy(alpha = .12f))
@@ -1584,7 +1755,7 @@ private fun MetricBar(label: String, value: Long, total: Long, color: Color) {
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-private fun AddTransactionDialog(initialTransaction: MoneyTransaction?, categories: List<String>, onDismiss: () -> Unit, onSave: (MoneyTransaction, RecurrenceFrequency?) -> Unit) {
+private fun AddTransactionScreen(initialTransaction: MoneyTransaction?, categories: List<String>, onDismiss: () -> Unit, onSave: (MoneyTransaction, RecurrenceFrequency?) -> Unit) {
     var title by remember(initialTransaction?.id) { mutableStateOf(initialTransaction?.title.orEmpty()) }
     var amount by remember(initialTransaction?.id) { mutableStateOf(initialTransaction?.amountMinor?.let(::minorUnitsInput).orEmpty()) }
     var category by remember(initialTransaction?.id) { mutableStateOf(initialTransaction?.category ?: categories.firstOrNull() ?: "Other") }
@@ -1594,7 +1765,7 @@ private fun AddTransactionDialog(initialTransaction: MoneyTransaction?, categori
     var showDatePicker by remember { mutableStateOf(false) }
     var note by remember(initialTransaction?.id) { mutableStateOf(initialTransaction?.note.orEmpty()) }
     var type by remember(initialTransaction?.id) { mutableStateOf(initialTransaction?.type ?: TransactionType.EXPENSE) }
-    var recurrence by remember { mutableStateOf<RecurrenceFrequency?>(null) }
+    var recurrence by remember(initialTransaction?.id) { mutableStateOf<RecurrenceFrequency?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     if (showDatePicker) {
         val pickerState = rememberDatePickerState(initialSelectedDateMillis = datePickerMillis(selectedDate))
@@ -1610,16 +1781,30 @@ private fun AddTransactionDialog(initialTransaction: MoneyTransaction?, categori
         ) {
             DatePicker(state = pickerState, showModeToggle = false)
         }
-    } else {
-        AlertDialog(onDismissRequest = onDismiss, title = { Text(if (initialTransaction == null) "Add transaction" else "Edit transaction", fontWeight = FontWeight.Bold) }, text = {
-            Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { TransactionType.entries.forEach { option ->
-                    Button(onClick = { type = option }, colors = ButtonDefaults.buttonColors(containerColor = if (type == option) Green else Canvas)) { Text(if (option == TransactionType.EXPENSE) "Expense" else "Income", color = if (type == option) Color.White else Ink) }
-                } }
-                OutlinedTextField(value = title, onValueChange = { title = it }, label = { Text("Description") }, singleLine = true)
-                OutlinedTextField(value = amount, onValueChange = { amount = it.filter { ch -> ch.isDigit() || ch == '.' } }, label = { Text("Amount (${LocalCurrency.current.code})") }, singleLine = true)
-                CategoryPicker(category, (categories + category).distinct(), { category = it })
-                Card(
+    }
+    Column(Modifier.fillMaxSize()) {
+        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Spacer(Modifier.height(4.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) { TransactionType.entries.forEach { option ->
+                val selected = type == option
+                Surface(
+                    onClick = { type = option },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .25f) else MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Row(Modifier.padding(vertical = 15.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                        PennyIcon(if (option == TransactionType.EXPENSE) "arrow-top-right" else "arrow-bottom-left", tint = if (selected) Green else Muted, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(7.dp))
+                        Text(if (option == TransactionType.EXPENSE) "Expense" else "Income", color = if (selected) Ink else Muted, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    }
+                }
+            } }
+            OutlinedTextField(value = title, onValueChange = { title = it; error = null }, modifier = Modifier.fillMaxWidth(), label = { Text("Description") }, singleLine = true, shape = RoundedCornerShape(16.dp))
+            OutlinedTextField(value = amount, onValueChange = { amount = it.filter { ch -> ch.isDigit() || ch == '.' }; error = null }, modifier = Modifier.fillMaxWidth(), label = { Text("Amount (${LocalCurrency.current.code})") }, singleLine = true, shape = RoundedCornerShape(16.dp))
+            CategoryPicker(category, (categories + category).distinct(), { category = it })
+            Card(
                     onClick = { showDatePicker = true },
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .48f)),
@@ -1636,16 +1821,19 @@ private fun AddTransactionDialog(initialTransaction: MoneyTransaction?, categori
                         PennyIcon("pencil-outline", tint = Muted, modifier = Modifier.size(18.dp))
                     }
                 }
-                OutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("Note (optional)") }, minLines = 2, maxLines = 3)
-                Text("Repeat", fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = Ink)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterChip(selected = recurrence == null, onClick = { recurrence = null }, label = { Text("Never") })
-                    FilterChip(selected = recurrence == RecurrenceFrequency.WEEKLY, onClick = { recurrence = RecurrenceFrequency.WEEKLY }, label = { Text("Weekly") })
-                    FilterChip(selected = recurrence == RecurrenceFrequency.MONTHLY, onClick = { recurrence = RecurrenceFrequency.MONTHLY }, label = { Text("Monthly") })
-                }
-                error?.let { Text(it, color = Coral, fontSize = 12.sp) }
+            OutlinedTextField(value = note, onValueChange = { note = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Note (optional)") }, minLines = 2, maxLines = 3, shape = RoundedCornerShape(16.dp))
+            Text("Repeat", fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = Ink)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilterChip(selected = recurrence == null, onClick = { recurrence = null }, label = { Text("Never") })
+                FilterChip(selected = recurrence == RecurrenceFrequency.WEEKLY, onClick = { recurrence = RecurrenceFrequency.WEEKLY }, label = { Text("Weekly") })
+                FilterChip(selected = recurrence == RecurrenceFrequency.MONTHLY, onClick = { recurrence = RecurrenceFrequency.MONTHLY }, label = { Text("Monthly") })
             }
-        }, confirmButton = { TextButton(onClick = {
+            error?.let { Text(it, color = Coral, fontSize = 12.sp) }
+        }
+        Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 8.dp) {
+            Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 22.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f), shape = RoundedCornerShape(16.dp)) { Text("Cancel") }
+                Button(onClick = {
             val parsedMinor = amount.toMinorUnits()
             when { title.isBlank() -> error = "Add a description."; parsedMinor == null || parsedMinor <= 0 -> error = "Enter an amount greater than zero."; category.isBlank() -> error = "Choose a category."; else -> {
                 val zone = TimeZone.currentSystemDefault()
@@ -1654,7 +1842,9 @@ private fun AddTransactionDialog(initialTransaction: MoneyTransaction?, categori
                 val timestamp = LocalDateTime(selectedDate, currentLocal.time).toInstant(zone).toEpochMilliseconds()
                 onSave(MoneyTransaction(initialTransaction?.id ?: timestamp.toString(), title.trim(), parsedMinor, type, category.trim(), timestamp, note.trim()), recurrence)
             } }
-        }) { Text(if (initialTransaction == null) "Save transaction" else "Save changes") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = Muted) } })
+                }, modifier = Modifier.weight(1.4f), shape = RoundedCornerShape(16.dp)) { Text(if (initialTransaction == null) "Save transaction" else "Save changes") }
+            }
+        }
     }
 }
 
@@ -1729,7 +1919,7 @@ private fun categoryIcon(category: String, type: TransactionType): String = when
 }
 
 @Composable
-private fun PennyIcon(name: String, tint: Color, modifier: Modifier = Modifier) {
+private fun PennyIcon(name: String, tint: Color, modifier: Modifier = Modifier, contentDescription: String? = null) {
     val icon = remember(name) { Mdi.fromMdiName(name) ?: Mdi.fromMdiName("help-circle")!! }
-    Icon(imageVector = icon.rememberImageVector(), contentDescription = null, modifier = modifier, tint = tint)
+    Icon(imageVector = icon.rememberImageVector(), contentDescription = contentDescription, modifier = modifier, tint = tint)
 }

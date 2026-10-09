@@ -1,0 +1,47 @@
+name: Mobile CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Android checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Check translated resources
+        run: python scripts/check_localized_resources.py
+      - name: Run shared tests and build Android app
+        run: ./gradlew :shared:testAndroidHostTest :androidApp:assembleDebug
+
+  ios:
+    name: iOS checks
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: Check translated resources
+        run: python3 scripts/check_localized_resources.py
+      - name: Integrate the Kotlin framework and resolve Swift packages
+        env:
+          XCODEPROJ_PATH: ${{ github.workspace }}/iosApp/iosApp.xcodeproj
+          GRADLE_PROJECT_PATH: :shared
+        run: ./gradlew :shared:integrateEmbedAndSign :shared:integrateLinkagePackage
+      - name: Build iOS simulator app
+        run: xcodebuild -project iosApp/iosApp.xcodeproj -scheme iosApp -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
