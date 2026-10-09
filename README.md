@@ -1,90 +1,167 @@
 # Penny
 
-Penny is an offline-first personal finance app for Android and iOS, built with Kotlin Multiplatform and Compose Multiplatform. Financial records live on the device in a Room database. The database is the source of truth; screens react to its flows, and there is no backend, account, or network dependency.
+**A privacy-focused, offline-first personal finance app for Android and iOS, built with Kotlin Multiplatform and Compose Multiplatform.**
 
+Penny helps users track income, expenses, budgets, and recurring transactions without creating an account or relying on a server. All financial data stays on the device, persisted in a Room database that serves as the single source of truth.
 
 ## Screenshots
 
 <p align="center">
-  <img src="./screenshot-android-1.png" width="300" alt="Penny Android app preview" />
-  <img src="./screenshot-android-2.png" width="300" alt="Penny Android app preview" />
-  <img src="./screenshot-android-3.png" width="300" alt="Penny Android app preview" />
-  <img src="./screenshot-android-4.png" width="300" alt="Penny Android app preview" />
+  <img src="./screenshot-android-1.png" width="240" alt="Penny home dashboard showing balance and recent transactions" />
+  <img src="./screenshot-android-2.png" width="240" alt="Penny transaction history and activity filters" />
+  <img src="./screenshot-android-3.png" width="240" alt="Penny spending insights and category budgets" />
+  <img src="./screenshot-android-4.png" width="240" alt="Penny app settings and preferences" />
 </p>
 
-## What’s here
+## Features
 
-- Shared Compose dashboard for Android and iOS
-- Local income and expense entry with input validation
-- Room Multiplatform persistence backed by bundled SQLite
-- Reactive balance, income, expenses, recent activity, and cash-flow summary
-- Search, transaction-type and category filters over the full local history
-- Category-level spending breakdown
-- System, light, and dark appearance preferences, saved in Room
-- Selectable display currency (USD, EUR, GBP, CAD, AUD), saved in Room
-- English, Persian, Arabic, Spanish, French, Simplified Chinese, Japanese, and Korean UI preferences; Persian and Arabic use right-to-left layout
-- CSV export through the platform share sheet, with a generated export file
-- Passphrase-protected, encrypted full-data backup and file-based restore
-- Optional on-device reminders for upcoming recurring transactions and category budgets nearing their limits
-- Weekly and monthly recurring transactions, managed on a dedicated Scheduled screen
-- Monthly category budgets with progress, over-limit calculations, and cash-flow insights
-- Saved activity filters, transaction edit history, and device-authenticated app lock
-- Edit and delete actions for transactions, with a confirmation before deletion
-- Domain use cases and repository boundary
-- Koin dependency wiring
-- Kotlin serialization-ready transaction models
-- Common tests for finance calculations, validation, CSV formatting, and encrypted backup integrity
-- Room schema migrations for budgets, preferences, and recurring transaction rules
+### Personal Finance
+- Track income and expenses with input validation.
+- View balances, income, expenses, recent activity, and cash-flow summaries.
+- Search transactions and filter by type or category.
+- Analyze spending by category.
+- Create monthly category budgets with progress tracking, overspending calculations, and cash-flow insights.
+- Schedule weekly and monthly recurring transactions.
+- Review upcoming transactions on a dedicated Scheduled screen.
+- Save activity filters and review transaction edit history.
+- Edit transactions or delete them with confirmation.
+
+### Privacy & Data Management
+- Fully local data storage with Room and SQLite.
+- No backend, user accounts, cloud synchronization, or internet dependency.
+- Encrypted full-data backups and file-based restoration.
+- Passphrase-based backup encryption using PBKDF2-HMAC-SHA256 and authenticated AES-GCM.
+- Transactional restore of backed-up data, including recurring transaction rules.
+- CSV export through the native platform share sheet.
+- Optional local reminders for recurring transactions and budget limits.
+- Device-authenticated app lock.
+
+### Personalization & Accessibility
+- System, light, and dark themes.
+- Selectable display currencies: USD, EUR, GBP, CAD, and AUD.
+- Eight UI languages: English, Persian, Arabic, Spanish, French, Simplified Chinese, Japanese, and Korean.
+- Right-to-left layouts for Persian and Arabic.
+
+### Engineering
+- Kotlin Multiplatform and Compose Multiplatform UI.
+- Shared business logic and persistence across Android and iOS.
+- Room Multiplatform with bundled SQLite.
+- Clean separation between domain use cases, repository contracts, and data implementations.
+- Koin dependency injection.
+- Kotlin serialization-ready transaction models.
+- Common tests for financial calculations, validation, CSV formatting, and encrypted backup integrity.
+- Room schema migrations for budgets, preferences, and recurring transaction rules.
 
 ## Architecture
 
+Penny uses a local-first architecture. The Room database is the source of truth, and reactive data flows keep the UI synchronized with persisted records.
+
 ```mermaid
-flowchart LR
-  UI[Compose Multiplatform UI] --> UC[Domain use cases]
-  UC --> Repo[Repository contracts]
-  Repo --> RoomRepo[Room repositories]
-  RoomRepo --> DB[(Room / SQLite on device)]
-  DB -->|Flow updates| RoomRepo
-  RoomRepo --> UC
-  UC -->|StateFlow| UI
-  UI --> Platform[Android / iOS file, share, auth, notification APIs]
+flowchart TD
+    UI[Compose Multiplatform UI]
+    UC[Domain Use Cases]
+    Repo[Repository Contracts]
+    Impl[Room Repository Implementations]
+    DB[(Room / SQLite Database)]
+    Platform[Platform APIs]
+
+    UI --> UC
+    UC --> Repo
+    Repo --> Impl
+    Impl --> DB
+    DB -->|Reactive Flow Updates| Impl
+    Impl --> UC
+    UC -->|UI State| UI
+    UI --> Platform
 ```
 
-The same domain rules and persistence code are shared across both platforms. Platform adapters only handle operating-system capabilities.
+The shared module contains the domain rules, repository contracts, Room persistence, dependency injection, and presentation logic. Platform-specific implementations handle operating-system capabilities such as database paths, file selection, sharing, authentication, and notification scheduling.
+
+### Project Structure
 
 ```text
 shared/src/commonMain/
 ├── data/
-│   ├── local/database/   Room entities, DAO, database
-│   └── repository/       Room-backed repository implementation
-├── di/                   Koin module
+│   ├── local/database/   # Room entities, DAO, and database
+│   └── repository/       # Room-backed repository implementations
+├── di/                   # Koin dependency injection
 ├── domain/
-│   ├── model/            Finance models
-│   ├── repository/       Repository contract
-│   └── usecase/          Dashboard calculation and transaction rules
-└── presentation/         StateFlow-backed dashboard state and Compose UI
+│   ├── model/            # Finance domain models
+│   ├── repository/       # Repository contracts
+│   └── usecase/          # Finance rules and calculations
+└── presentation/         # UI state and Compose screens
 ```
 
-Platform-specific code is limited to device capabilities such as database paths, file pickers, sharing, authentication, and local notification scheduling. Android stores `penny.db` in its app database directory; iOS stores it in Application Support. Both use the same Room schema, DAO, repositories, and business logic. Room remains the source of truth; there is no backend or sync service.
+Android stores `penny.db` in its app database directory. iOS stores the database in Application Support. Both platforms share the same Room schema, DAO, repository implementations, and business logic.
 
-## Run
+## Tech Stack
 
-- Android: `./gradlew :androidApp:assembleDebug`
-- iOS: open `iosApp/iosApp.xcodeproj` in Xcode and run the `iosApp` scheme.
-- Common tests: `./gradlew :shared:allTests`
-- Android compile check: `./gradlew :androidApp:compileDebugKotlin`
-- iOS simulator compile check: `./gradlew :shared:compileKotlinIosSimulatorArm64`
+| Area | Technologies |
+|---|---|
+| Language | Kotlin |
+| Cross-platform | Kotlin Multiplatform (KMP) |
+| UI | Compose Multiplatform |
+| Local database | Room Multiplatform, SQLite |
+| Reactive state | Kotlin Flow, StateFlow |
+| Dependency injection | Koin |
+| Serialization | Kotlin serialization |
+| Testing | Kotlin Multiplatform common tests |
+| Platform integration | Android and iOS APIs |
 
-## Design notes
+## Getting Started
 
-Amounts are represented as integer minor units (for example, cents) to avoid floating-point arithmetic in financial totals. The selected currency changes the display label and does not perform exchange conversion. The starter experience is intentionally empty; add a transaction to populate the dashboard.
+### Android
 
-Encrypted backups use a random salt, PBKDF2-HMAC-SHA256 key derivation, and authenticated AES-GCM encryption. Restore validates the backup and replaces its Room tables in one transaction, including recurring rules. The backup passphrase is not stored by the app and cannot be recovered if forgotten. Recurring transaction and budget reminders are scheduled locally and require the operating system’s notification permission.
+Build a debug APK:
 
-Penny does not request internet access and does not send financial data off-device.
+```bash
+./gradlew :androidApp:assembleDebug
+```
 
-Locale resource catalogs are under shared/src/commonMain/composeResources/values*/strings.xml. Run python3 scripts/check_localized_resources.py to verify that the resource names remain aligned across the eight catalogs.
+Compile the Android Kotlin source:
 
-## Portfolio screenshots
+```bash
+./gradlew :androidApp:compileDebugKotlin
+```
 
-For a portfolio presentation, capture the Home dashboard, Activity filters, Insights budgets, Settings, transaction editor, and Backup & restore. Use sample data without personal information. Keep captures in screenshots/android/ and screenshots/ios/, then add them here with relative Markdown image links.
+### iOS
+
+Open `iosApp/iosApp.xcodeproj` in Xcode and run the `iosApp` scheme.
+
+To compile the shared module for an Apple Silicon iOS simulator:
+
+```bash
+./gradlew :shared:compileKotlinIosSimulatorArm64
+```
+
+### Tests
+
+Run the shared module's multiplatform tests:
+
+```bash
+./gradlew :shared:allTests
+```
+
+## Design & Security Notes
+
+- **Exact financial arithmetic:** Monetary amounts are stored as integer minor units, such as cents, avoiding floating-point rounding errors in financial totals.
+- **Display currency:** Changing the selected currency changes its display label only. Penny does not perform foreign-exchange conversion.
+- **Local-first experience:** A new installation starts with an empty dashboard. Add a transaction to populate it.
+- **Encrypted backups:** Each backup uses a random salt, PBKDF2-HMAC-SHA256 key derivation, and authenticated AES-GCM encryption. The app does not store the backup passphrase; a forgotten passphrase cannot be recovered.
+- **Safe restoration:** Backup validation occurs before the backed-up Room tables are replaced in a database transaction.
+- **Local notifications:** Reminder scheduling is handled on-device and requires the relevant operating-system notification permission.
+- **Localization consistency:** Translation resources are maintained under `shared/src/commonMain/composeResources/values*/strings.xml`.
+
+Check that the eight localization catalogs remain aligned:
+
+```bash
+python3 scripts/check_localized_resources.py
+```
+
+## Privacy
+
+Penny does not require an account, use a backend, or synchronize financial records to the cloud. Financial data is stored locally on the device.
+
+---
+
+*Built as a Kotlin Multiplatform portfolio project, with an emphasis on offline-first architecture, data privacy, shared business logic, and maintainable application design.*
