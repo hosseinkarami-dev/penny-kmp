@@ -13,6 +13,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.ui.backhandler.BackHandler
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.material3.Text as MaterialText
 import androidx.compose.runtime.*
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -391,6 +393,7 @@ fun App() {
 }
 
 @Composable
+@OptIn(ExperimentalComposeUiApi::class)
 private fun DashboardScreen(
     appearanceMode: AppearanceMode,
     onAppearanceModeChange: (AppearanceMode) -> Unit,
@@ -434,11 +437,20 @@ private fun DashboardScreen(
     var recurringRuleBeingEdited by remember { mutableStateOf<RecurringRule?>(null) }
     var selectedTab by remember { mutableStateOf("Home") }
     var transactionEditorOrigin by remember { mutableStateOf("Home") }
+    val isSecondaryScreen = selectedTab in setOf("Categories", "TransactionEditor", "Backup", "Scheduled")
+    val returnToMainScreen = {
+        selectedTab = when (selectedTab) {
+            "TransactionEditor" -> transactionEditorOrigin
+            "Categories", "Backup", "Scheduled" -> "Settings"
+            else -> "Home"
+        }
+    }
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     val contentScrollState = rememberScrollState()
     var previousScrollPosition by remember { mutableIntStateOf(0) }
     var fabVisible by remember { mutableStateOf(true) }
     val hasScrolled by remember { derivedStateOf { contentScrollState.value > 0 } }
+    BackHandler(enabled = isSecondaryScreen) { returnToMainScreen() }
     LaunchedEffect(remindersEnabled) {
         if (remindersEnabled) requestLocalReminderPermission() else cancelAllLocalReminders()
     }
@@ -522,7 +534,7 @@ private fun DashboardScreen(
                             Text(when { isTransactionEditor -> "Record the details of your transaction"; isBackup -> "Keep a secure copy of your Penny data"; isScheduled -> "Manage transactions you repeat"; else -> "Manage your budget and transaction labels" }, color = Muted, fontSize = 10.sp, lineHeight = 13.sp)
                         }
                     },
-                    navigationIcon = { IconButton(onClick = { selectedTab = if (isTransactionEditor) transactionEditorOrigin else "Settings" }) { PennyIcon("arrow-left", tint = Ink, modifier = Modifier.size(21.dp), contentDescription = localize("Back", LocalAppLanguage.current)) } },
+                    navigationIcon = { IconButton(onClick = returnToMainScreen) { PennyIcon("arrow-left", tint = Ink, modifier = Modifier.size(21.dp), contentDescription = localize("Back", LocalAppLanguage.current)) } },
                     actions = {},
                     scrollBehavior = scrollBehavior,
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, scrolledContainerColor = Color.Transparent),
